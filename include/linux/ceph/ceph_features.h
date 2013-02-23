@@ -12,22 +12,34 @@
 #define CEPH_FEATURE_MONNAMES       (1<<5)
 #define CEPH_FEATURE_RECONNECT_SEQ  (1<<6)
 #define CEPH_FEATURE_DIRLAYOUTHASH  (1<<7)
-/* bits 8-17 defined by user-space; not supported yet here */
+/* ... */
+#define CEPH_FEATURE_PGID64         (1<<9)
+/* ... */
+#define CEPH_FEATURE_PGPOOL3        (1<<11)
+/* ... */
+#define CEPH_FEATURE_OSDENC         (1<<13)
+/* ... */
 #define CEPH_FEATURE_CRUSH_TUNABLES (1<<18)
-/* bits 19-24 defined by user-space; not supported yet here */
+/* ... */
 #define CEPH_FEATURE_CRUSH_TUNABLES2 (1<<25)
-/* bit 26 defined by user-space; not supported yet here */
+/* ... */
 #define CEPH_FEATURE_REPLY_CREATE_INODE (1<<27)
 
 /*
  * Features supported.
  */
 #define CEPH_FEATURES_SUPPORTED_DEFAULT  \
-	(CEPH_FEATURE_NOSRCADDR |	 \
-	 CEPH_FEATURE_CRUSH_TUNABLES |	  \
-	 CEPH_FEATURE_CRUSH_TUNABLES2 |   \
+	(CEPH_FEATURE_NOSRCADDR |		\
+	 CEPH_FEATURE_PGID64 |			\
+	 CEPH_FEATURE_PGPOOL3 |			\
+	 CEPH_FEATURE_OSDENC |			\
+	 CEPH_FEATURE_CRUSH_TUNABLES |		\
+	 CEPH_FEATURE_CRUSH_TUNABLES2 |		\
 	 CEPH_FEATURE_REPLY_CREATE_INODE)
 
 #define CEPH_FEATURES_REQUIRED_DEFAULT   \
-	(CEPH_FEATURE_NOSRCADDR)
+	(CEPH_FEATURE_NOSRCADDR |	 \
+	 CEPH_FEATURE_PGID64 |		 \
+	 CEPH_FEATURE_PGPOOL3 |		 \
+	 CEPH_FEATURE_OSDENC)
 #endif
