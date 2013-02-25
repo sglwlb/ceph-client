@@ -396,6 +396,48 @@ static char *obj_request_type_string(enum obj_request_type type)
 #undef CASE
 }
 
+static void rbd_img_request_print(struct rbd_img_request *img_request)
+{
+	printk("----------------\n");
+	printk("img_request @ %p:\n", img_request);
+	if (!img_request)
+		return;
+	if (img_request->rq)
+		printk("               rq: %p\n", img_request->rq);
+	else
+		printk("               rq: (none)\n");
+	printk("          rbd_dev: %p (%s)\n", img_request->rbd_dev,
+			img_request->rbd_dev->name);
+
+	printk("           offset: 0x%016llx = %llu\n",
+		(unsigned long long) img_request->offset,
+		(unsigned long long) img_request->offset);
+	printk("           length: 0x%016llx = %llu\n",
+		(unsigned long long) img_request->length,
+		(unsigned long long) img_request->length);
+	printk("        direction: %s\n",
+		img_request->write_request ? "write" : "read");
+	if (img_request->write_request)
+		printk("            snapc: %p\n", img_request->snapc);
+	else
+		printk("          snap_id: %llu\n",
+			(unsigned long long)img_request->snap_id);
+	printk("  completion_lock: ...\n");
+	printk("  next_completion: %u\n", img_request->next_completion);
+	if (!img_request->callback)
+		printk("         callback: (none)\n");
+	else
+		printk("         callback: %p (???)\n", img_request->callback);
+	printk("obj_request_count: %u\n", img_request->obj_request_count);
+	printk("     obj_requests: next: %p\n",
+		img_request->obj_requests.next);
+	printk("                   prev: %p\n",
+		img_request->obj_requests.prev);
+	printk("             kref: %d\n",
+		atomic_read(&img_request->kref.refcount));
+	printk("\n");
+}
+
 static void rbd_img_obj_callback(struct rbd_obj_request *obj_request);
 static void rbd_obj_request_put(struct rbd_obj_request *obj_request);
 static void rbd_obj_request_print( struct rbd_obj_request *obj_request)
@@ -2113,6 +2155,7 @@ static void rbd_request_fn(struct request_queue *q)
 		img_request->rq = rq;
 
 		result = rbd_img_request_fill_bio(img_request, rq->bio);
+		(void) rbd_img_request_print;	/* Avoid a warning */
 		if (!result)
 			result = rbd_img_request_submit(img_request);
 		if (result)
