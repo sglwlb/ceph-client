@@ -383,6 +383,75 @@ void rbd_warn(struct rbd_device *rbd_dev, const char *fmt, ...)
 #  define rbd_assert(expr)	((void) 0)
 #endif /* !RBD_DEBUG */
 
+static char *obj_request_type_string(enum obj_request_type type)
+{
+#define CASE(x) case OBJ_REQUEST_ ## x: return #x
+	switch (type) {
+	CASE(NODATA);
+	CASE(BIO);
+	CASE(PAGES);
+	default:
+		return "???";
+	}
+#undef CASE
+}
+
+static void rbd_img_obj_callback(struct rbd_obj_request *obj_request);
+static void rbd_obj_request_put(struct rbd_obj_request *obj_request);
+static void rbd_obj_request_print( struct rbd_obj_request *obj_request)
+{
+	printk("----------------\n");
+	printk("obj_request @ %p:\n", obj_request);
+	if (!obj_request)
+		return;
+	printk("    object_name: \"%s\"\n", obj_request->object_name);
+	printk("         offset: 0x%016llx = %llu\n",
+		(unsigned long long) obj_request->offset,
+		(unsigned long long) obj_request->offset);
+	printk("         length: 0x%016llx = %llu\n",
+		(unsigned long long) obj_request->length,
+		(unsigned long long) obj_request->length);
+	if (obj_request->img_request)
+		printk("    img_request: %p (%s)\n", obj_request->img_request,
+			obj_request->img_request->rbd_dev->name);
+	else
+		printk("    img_request: (none)\n");
+
+	printk("          links: next: %p\n", obj_request->links.next);
+	printk("                 prev: %p\n", obj_request->links.prev);
+	printk("          which: %u\n", (unsigned int) obj_request->which);
+	printk("           type: %d = %s\n", (unsigned int) obj_request->type,
+		obj_request_type_string(obj_request->type));
+	if (obj_request->type == OBJ_REQUEST_BIO) {
+		printk("       bio_list: %p\n", obj_request->bio_list);
+	} else if (obj_request->type == OBJ_REQUEST_PAGES) {
+		printk("          pages: %p\n", obj_request->pages);
+		printk("     page_count: %u\n",
+			(unsigned int) obj_request->page_count);
+	}
+	printk("        osd_req: %p\n", obj_request->osd_req);
+	printk("        xferred: 0x%016llx = %llu\n",
+		(unsigned long long) obj_request->xferred,
+		(unsigned long long) obj_request->xferred);
+	printk("        version: 0x%016llx = %llu\n",
+		(unsigned long long) obj_request->version,
+		(unsigned long long) obj_request->version);
+	printk("         result: %d\n", (int) obj_request->result);
+	printk("           done: %d\n", atomic_read(&obj_request->done));
+	if (!obj_request->callback)
+		printk("       callback: (none)\n");
+	else if (obj_request->callback == rbd_img_obj_callback)
+		printk("       callback: rbd_img_obj_callback\n");
+	else if (obj_request->callback == rbd_obj_request_put)
+		printk("       callback: rbd_obj_request_put\n");
+	else
+		printk("       callback: %p (???)\n", obj_request->callback);
+	printk("     completion: ...\n");
+	printk("           kref: %d\n",
+		atomic_read(&obj_request->kref.refcount));
+	printk("\n");
+}
+
 static int rbd_dev_refresh(struct rbd_device *rbd_dev, u64 *hver);
 static int rbd_dev_v2_refresh(struct rbd_device *rbd_dev, u64 *hver);
 
@@ -1342,6 +1411,8 @@ static void rbd_osd_req_callback(struct ceph_osd_request *osd_req,
 	obj_request->version = le64_to_cpu(osd_req->r_reassert_version.version);
 
 	WARN_ON(osd_req->r_num_ops != 1);	/* For now */
+
+	(void) rbd_obj_request_print;	/* Avoid a warning */
 
 	/*
 	 * We support a 64-bit length, but ultimately it has to be
