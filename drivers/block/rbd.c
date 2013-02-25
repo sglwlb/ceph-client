@@ -767,8 +767,11 @@ static int rbd_header_from_disk(struct rbd_image_header *header,
 
 		/* Save a copy of the snapshot names */
 
-		if (snap_names_len > (u64) SIZE_MAX)
+		if (snap_names_len > (u64) SIZE_MAX) {
+			printk("%s: %d, EIO: snap_names_len = %llu\n", __func__,
+				__LINE__, (unsigned long long) snap_names_len);
 			return -EIO;
+		}
 		header->snap_names = kmalloc(snap_names_len, GFP_KERNEL);
 		if (!header->snap_names)
 			goto out_err;
@@ -1412,7 +1415,8 @@ static void rbd_osd_req_callback(struct ceph_osd_request *osd_req,
 
 	WARN_ON(osd_req->r_num_ops != 1);	/* For now */
 
-	(void) rbd_obj_request_print;	/* Avoid a warning */
+	if (obj_request->result && obj_request->result != (s32) -ENOENT)
+		rbd_obj_request_print(obj_request);
 
 	/*
 	 * We support a 64-bit length, but ultimately it has to be
@@ -3054,8 +3058,11 @@ static int rbd_dev_v2_parent_info(struct rbd_device *rbd_dev)
 	/* The ceph file layout needs to fit pool id in 32 bits */
 
 	ret = -EIO;
-	if (WARN_ON(parent_spec->pool_id > (u64) U32_MAX))
+	if (WARN_ON(parent_spec->pool_id > (u64) U32_MAX)) {
+		printk("%s: %d: EIO: pool_id = %llu\n", __func__, __LINE__,
+			(unsigned long long) parent_spec->pool_id);
 		goto out;
+	}
 
 	image_id = ceph_extract_encoded_string(&p, end, NULL, GFP_KERNEL);
 	if (IS_ERR(image_id)) {
@@ -3353,6 +3360,8 @@ static int rbd_dev_v2_refresh(struct rbd_device *rbd_dev, u64 *hver)
 	if (ret)
 		goto out;
 	if (rbd_dev->header.obj_order != obj_order) {
+		printk("%s: %d: EIO: obj_order %u != %u\n", __func__, __LINE__,
+			rbd_dev->header.obj_order, obj_order);
 		ret = -EIO;
 		goto out;
 	}
@@ -3496,8 +3505,10 @@ static int rbd_dev_snaps_register(struct rbd_device *rbd_dev)
 	int ret = 0;
 
 	dout("%s:\n", __func__);
-	if (WARN_ON(!device_is_registered(&rbd_dev->dev)))
+	if (WARN_ON(!device_is_registered(&rbd_dev->dev))) {
+		printk("%s: %d: EIO: not registered\n", __func__, __LINE__);
 		return -EIO;
+	}
 
 	list_for_each_entry(snap, &rbd_dev->snaps, node) {
 		if (!rbd_snap_registered(snap)) {
@@ -4179,6 +4190,8 @@ static ssize_t rbd_add(struct bus_type *bus,
 	/* The ceph file layout needs to fit pool id in 32 bits */
 
 	if (WARN_ON(spec->pool_id > (u64) U32_MAX)) {
+		printk("%s: %d: EIO: pool_id = %llu\n", __func__, __LINE__,
+			(unsigned long long) spec->pool_id);
 		rc = -EIO;
 		goto err_out_client;
 	}
