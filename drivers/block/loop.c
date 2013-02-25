@@ -230,8 +230,8 @@ static int __do_lo_send_write(struct file *file,
 	set_fs(old_fs);
 	if (likely(bw == len))
 		return 0;
-	printk(KERN_ERR "loop: Write error at byte offset %llu, length %i.\n",
-			(unsigned long long)pos, len);
+	printk(KERN_ERR "loop: Write error (%zd) at byte offset %llu, "
+			"length %i.\n", bw, (unsigned long long)pos, len);
 	if (bw >= 0)
 		bw = -EIO;
 	return bw;
@@ -270,8 +270,9 @@ static int do_lo_send_write(struct loop_device *lo, struct bio_vec *bvec,
 		return __do_lo_send_write(lo->lo_backing_file,
 				page_address(page), bvec->bv_len,
 				pos);
-	printk(KERN_ERR "loop: Transfer error at byte offset %llu, "
-			"length %i.\n", (unsigned long long)pos, bvec->bv_len);
+	printk(KERN_ERR "loop: Transfer error (%d) at byte offset %llu, "
+			"length %i.\n", ret, (unsigned long long)pos,
+			bvec->bv_len);
 	if (ret > 0)
 		ret = -EIO;
 	return ret;
