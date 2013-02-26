@@ -1336,6 +1336,9 @@ static int rbd_obj_request_submit(struct ceph_osd_client *osdc,
 static void rbd_img_request_complete(struct rbd_img_request *img_request)
 {
 	dout("%s: img %p\n", __func__, img_request);
+	if (img_request->offset == 2199538393088 ||
+			img_request->offset == 2199533527040)
+		rbd_img_request_print(img_request);
 	if (img_request->callback)
 		img_request->callback(img_request);
 	else
@@ -2155,7 +2158,12 @@ static void rbd_request_fn(struct request_queue *q)
 		img_request->rq = rq;
 
 		result = rbd_img_request_fill_bio(img_request, rq->bio);
-		(void) rbd_img_request_print;	/* Avoid a warning */
+		if (!result && (img_request->offset == 2199538393088 ||
+				img_request->offset == 2199533527040)) {
+			printk("rq offset = %llu, length = %llu\n",
+				offset, length);
+			rbd_img_request_print(img_request);
+		}
 		if (!result)
 			result = rbd_img_request_submit(img_request);
 		if (result)
