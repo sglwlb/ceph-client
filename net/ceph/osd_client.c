@@ -200,10 +200,18 @@ struct ceph_osd_request *ceph_osdc_alloc_request(struct ceph_osd_client *osdc,
 	struct ceph_osd_request *req;
 	struct ceph_msg *msg;
 	int needs_trail;
-	int num_op = get_num_ops(ops, &needs_trail);
-	size_t msg_size = sizeof(struct ceph_osd_request_head);
+	int num_ops = get_num_ops(ops, &needs_trail);
+	size_t msg_size;
 
-	msg_size += num_op*sizeof(struct ceph_osd_op);
+	msg_size = 4 + 4 + 8 + 8 + 4+8;
+	msg_size += 2 + 4 + 8 + 4 + 4; /* oloc */
+	msg_size += 1 + 8 + 4 + 4;     /* pg_t */
+	msg_size += 4 + MAX_OBJ_NAME_SIZE;
+	msg_size += 2 + num_ops*sizeof(struct ceph_osd_op);
+	msg_size += 8;  /* snapid */
+	msg_size += 8;  /* snap_seq */
+	msg_size += 8 * (snapc ? snapc->num_snaps : 0);  /* snaps */
+	msg_size += 4;
 
 	if (use_mempool) {
 		req = mempool_alloc(osdc->req_mempool, gfp_flags);
@@ -254,9 +262,6 @@ struct ceph_osd_request *ceph_osdc_alloc_request(struct ceph_osd_client *osdc,
 	}
 
 	/* create request message; allow space for oid */
-	msg_size += MAX_OBJ_NAME_SIZE;
-	if (snapc)
-		msg_size += sizeof(u64) * snapc->num_snaps;
 	if (use_mempool)
 		msg = ceph_msgpool_get(&osdc->msgpool_op, 0);
 	else
@@ -372,52 +377,76 @@ void ceph_osdc_build_request(struct ceph_osd_request *req,
 			     int oid_len)
 {
 	struct ceph_msg *msg = req->r_request;
-	struct ceph_osd_request_head *head;
 	struct ceph_osd_req_op *src_op;
-	struct ceph_osd_op *op;
 	void *p;
-	int num_op = get_num_ops(src_ops, NULL);
-	size_t msg_size = sizeof(*head) + num_op*sizeof(*op);
+	int num_ops = get_num_ops(src_ops, NULL);
+	size_t msg_size;
 	int flags = req->r_flags;
 	u64 data_len = 0;
 	int i;
 
-	head = msg->front.iov_base;
-	op = (void *)(head + 1);
-	p = (void *)(op + num_op);
-
+	req->r_num_ops = num_ops;
 	req->r_snapc = ceph_get_snap_context(snapc);
 
-	head->client_inc = cpu_to_le32(1); /* always, for now. */
-	head->flags = cpu_to_le32(flags);
-	if (flags & CEPH_OSD_FLAG_WRITE)
-		ceph_encode_timespec(&head->mtime, mtime);
-	head->num_ops = cpu_to_le16(num_op);
+	/* encode request */
+	msg->hdr.version = cpu_to_le16(4);
 
+	p = msg->front.iov_base;
+	ceph_encode_32(&p, 1);   /* client_inc  is always 1 */
+	req->r_request_osdmap_epoch = p;
+	p += 4;
+	req->r_request_flags = p;
+	p += 4;
+	if (req->r_flags & CEPH_OSD_FLAG_WRITE)
+		ceph_encode_timespec(p, mtime);
+	p += sizeof(struct ceph_timespec);
+	req->r_request_reassert_version = p;
+	p += sizeof(struct ceph_eversion); /* will get filled in */
+	
+	/* oloc */
+	ceph_encode_8(&p, 4);
+	ceph_encode_8(&p, 4);
+	ceph_encode_32(&p, 8 + 4 + 4);
+	req->r_request_pool = p;
+	p += 8;
+	ceph_encode_32(&p, -1);  /* preferred */
+	ceph_encode_32(&p, 0);   /* key len */
 
-	/* fill in oid */
-	head->object_len = cpu_to_le32(oid_len);
+	ceph_encode_8(&p, 1);
+	req->r_request_pgid = p;
+	p += 8 + 4;
+	ceph_encode_32(&p, -1);  /* preferred */
+
+	/* oid */
+	ceph_encode_32(&p, oid_len);
 	memcpy(p, oid, oid_len);
+	dout("oid '%.*s' len %d\n", oid_len, oid, oid_len);
 	p += oid_len;
 
+	/* ops */
+	ceph_encode_16(&p, num_ops);
 	src_op = src_ops;
-	while (src_op->op) {
-		osd_req_encode_op(req, op, src_op);
-		src_op++;
-		op++;
+	req->r_request_ops = p;
+	for (i = 0; i < num_ops; i++, src_op++) {
+		osd_req_encode_op(req, p, src_op);
+		p += sizeof(struct ceph_osd_op);
 	}
+
+	/* snaps */
+	ceph_encode_64(&p, req->r_snapid);
+	ceph_encode_64(&p, req->r_snapc ? req->r_snapc->seq : 0);
+	ceph_encode_32(&p, req->r_snapc ? req->r_snapc->num_snaps : 0);
+	if (req->r_snapc) {	
+		for (i = 0; i < snapc->num_snaps; i++) {
+			ceph_encode_64(&p, req->r_snapc->snaps[i]);
+		}
+	}
+
+	req->r_request_attempts = p;
+	p += 4;
 
 	if (req->r_trail)
 		data_len += req->r_trail->length;
-
-	if (snapc) {
-		head->snap_seq = cpu_to_le64(snapc->seq);
-		head->num_snaps = cpu_to_le32(snapc->num_snaps);
-		for (i = 0; i < snapc->num_snaps; i++) {
-			put_unaligned_le64(snapc->snaps[i], p);
-			p += sizeof(u64);
-		}
-	}
 
 	if (flags & CEPH_OSD_FLAG_WRITE) {
 		req->r_request->hdr.data_off = cpu_to_le16(off);
@@ -433,6 +462,9 @@ void ceph_osdc_build_request(struct ceph_osd_request *req,
 	msg_size = p - msg->front.iov_base;
 	msg->front.iov_len = msg_size;
 	msg->hdr.front_len = cpu_to_le32(msg_size);
+
+	dout("build_request msg_size was %d num_ops %d\n", (int)msg_size,
+	     num_ops);
 	return;
 }
 EXPORT_SYMBOL(ceph_osdc_build_request);
@@ -1038,21 +1070,22 @@ out:
 static void __send_request(struct ceph_osd_client *osdc,
 			   struct ceph_osd_request *req)
 {
-	struct ceph_osd_request_head *reqhead;
+	void *p;
 
-	dout("send_request %p tid %llu to osd%d flags %d\n",
-	     req, req->r_tid, req->r_osd->o_osd, req->r_flags);
+	dout("send_request %p tid %llu to osd%d flags %d pg %lld.%x\n",
+	     req, req->r_tid, req->r_osd->o_osd, req->r_flags,
+	     (unsigned long long)req->r_pgid.pool, req->r_pgid.seed);
 
-	reqhead = req->r_request->front.iov_base;
-	reqhead->snapid = cpu_to_le64(req->r_snapid);
-	reqhead->osdmap_epoch = cpu_to_le32(osdc->osdmap->epoch);
-	reqhead->flags |= cpu_to_le32(req->r_flags);  /* e.g., RETRY */
-	reqhead->reassert_version = req->r_reassert_version;
-
-	reqhead->layout.ol_pgid.ps = cpu_to_le16(req->r_pgid.seed);
-	reqhead->layout.ol_pgid.pool = cpu_to_le32(req->r_pgid.pool);
-	reqhead->layout.ol_pgid.preferred = cpu_to_le16(-1);
-	reqhead->layout.ol_stripe_unit = 0;
+	/* fill in message content that changes each time we send it */
+	put_unaligned_le32(osdc->osdmap->epoch, req->r_request_osdmap_epoch);
+	put_unaligned_le32(req->r_flags, req->r_request_flags);
+	put_unaligned_le64(req->r_pgid.pool, req->r_request_pool);
+	p = req->r_request_pgid;
+	ceph_encode_64(&p, req->r_pgid.pool);
+	ceph_encode_32(&p, req->r_pgid.seed);
+	put_unaligned_le64(1, req->r_request_attempts);  /* FIXME */
+	memcpy(req->r_request_reassert_version, &req->r_reassert_version,
+	       sizeof(req->r_reassert_version));
 
 	req->r_stamp = jiffies;
 	list_move_tail(&req->r_req_lru_item, &osdc->req_lru);
@@ -1155,6 +1188,26 @@ static void complete_request(struct ceph_osd_request *req)
 	complete_all(&req->r_safe_completion);  /* fsync waiter */
 }
 
+static int __decode_pgid(void **p, void *end, struct ceph_pg *pgid)
+{
+	__u8 v;
+
+	ceph_decode_need(p, end, 1 + 8 + 4 + 4, bad);
+	v = ceph_decode_8(p);
+	if (v > 1) {
+		pr_warning("do not understand pg encoding %d > 1", v);
+		return -EINVAL;
+	}
+	pgid->pool = ceph_decode_64(p);
+	pgid->seed = ceph_decode_32(p);
+	*p += 4;
+	return 0;
+
+bad:
+	pr_warning("incomplete pg encoding");
+	return -EINVAL;
+}
+
 /*
  * handle osd op reply.  either call the callback if it is specified,
  * or do the completion to wake up the waiting thread.
@@ -1162,22 +1215,42 @@ static void complete_request(struct ceph_osd_request *req)
 static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 			 struct ceph_connection *con)
 {
-	struct ceph_osd_reply_head *rhead = msg->front.iov_base;
+	void *p, *end;
 	struct ceph_osd_request *req;
 	u64 tid;
-	int numops, object_len, flags;
+	int object_len;
+	int numops, payload_len, flags;
 	s32 result;
+	s32 retry_attempt;
+	struct ceph_pg pg;
+	int err;
+	u32 reassert_epoch;
+	u64 reassert_version;
+	u32 osdmap_epoch;
+	int i;
 
 	tid = le64_to_cpu(msg->hdr.tid);
-	if (msg->front.iov_len < sizeof(*rhead))
+	dout("handle_reply %p tid %llu\n", msg, tid);
+
+	p = msg->front.iov_base;
+	end = p + msg->front.iov_len;
+
+	ceph_decode_need(&p, end, 4, bad);
+	object_len = ceph_decode_32(&p);
+	ceph_decode_need(&p, end, object_len, bad);
+	p += object_len;
+
+	err = __decode_pgid(&p, end, &pg);
+	if (err)
 		goto bad;
-	numops = le32_to_cpu(rhead->num_ops);
-	object_len = le32_to_cpu(rhead->object_len);
-	result = le32_to_cpu(rhead->result);
-	if (msg->front.iov_len != sizeof(*rhead) + object_len +
-	    numops * sizeof(struct ceph_osd_op))
-		goto bad;
-	dout("handle_reply %p tid %llu result %d\n", msg, tid, (int)result);
+
+	ceph_decode_need(&p, end, 8 + 4 + 4 + 8 + 4, bad);
+	flags = ceph_decode_64(&p);
+	result = ceph_decode_32(&p);
+	reassert_epoch = ceph_decode_32(&p);
+	reassert_version = ceph_decode_64(&p);
+	osdmap_epoch = ceph_decode_32(&p);
+
 	/* lookup */
 	mutex_lock(&osdc->request_mutex);
 	req = __lookup_request(osdc, tid);
@@ -1187,7 +1260,37 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 		return;
 	}
 	ceph_osdc_get_request(req);
-	flags = le32_to_cpu(rhead->flags);
+
+	dout("handle_reply %p tid %llu req %p result %d\n", msg, tid,
+	     req, result);
+
+	ceph_decode_need(&p, end, 4, bad);
+	numops = ceph_decode_32(&p);
+	if (numops > CEPH_OSD_MAX_OP)
+		goto bad_put;
+	if (numops != req->r_num_ops)
+		goto bad_put;
+	payload_len = 0;
+	ceph_decode_need(&p, end, numops * sizeof(struct ceph_osd_op), bad);
+	for (i = 0; i < numops; i++) {
+		struct ceph_osd_op *op = p;
+		int len;
+
+		len = le32_to_cpu(op->payload_len);
+		req->r_reply_op_len[i] = len;
+		payload_len += len;
+		p += sizeof(*op);
+	}
+	if (payload_len != le32_to_cpu(msg->hdr.data_len)) {
+		pr_warning("sum of op payload lens %d != data_len %d",
+			   payload_len, le32_to_cpu(msg->hdr.data_len));
+		goto bad_put;
+	}
+
+	ceph_decode_need(&p, end, 4 + numops * 4, bad);
+	retry_attempt = ceph_decode_32(&p);
+	for (i = 0; i < numops; i++)
+		req->r_reply_op_result[i] = ceph_decode_32(&p);
 
 	/*
 	 * if this connection filled our message, drop our reference now, to
@@ -1202,7 +1305,7 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 	if (!req->r_got_reply) {
 		unsigned int bytes;
 
-		req->r_result = le32_to_cpu(rhead->result);
+		req->r_result = result;
 		bytes = le32_to_cpu(msg->hdr.data_len);
 		dout("handle_reply result %d bytes %d\n", req->r_result,
 		     bytes);
@@ -1210,7 +1313,8 @@ static void handle_reply(struct ceph_osd_client *osdc, struct ceph_msg *msg,
 			req->r_result = bytes;
 
 		/* in case this is a write and we need to replay, */
-		req->r_reassert_version = rhead->reassert_version;
+		req->r_reassert_version.epoch = cpu_to_le32(reassert_epoch);
+		req->r_reassert_version.version = cpu_to_le64(reassert_version);
 
 		req->r_got_reply = 1;
 	} else if ((flags & CEPH_OSD_FLAG_ONDISK) == 0) {
@@ -1245,10 +1349,11 @@ done:
 	ceph_osdc_put_request(req);
 	return;
 
+bad_put:
+	ceph_osdc_put_request(req);
 bad:
-	pr_err("corrupt osd_op_reply got %d %d expected %d\n",
-	       (int)msg->front.iov_len, le32_to_cpu(msg->hdr.front_len),
-	       (int)sizeof(*rhead));
+	pr_err("corrupt osd_op_reply got %d %d\n",
+	       (int)msg->front.iov_len, le32_to_cpu(msg->hdr.front_len));
 	ceph_msg_dump(msg);
 }
 

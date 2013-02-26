@@ -1164,19 +1164,13 @@ done_pages:
 static void rbd_req_cb(struct ceph_osd_request *req, struct ceph_msg *msg)
 {
 	struct rbd_request *req_data = req->r_priv;
-	struct ceph_osd_reply_head *replyhead;
-	struct ceph_osd_op *op;
-	__s32 rc;
+	int rc = req->r_result;
 	u64 bytes;
 	int read_op;
 
 	/* parse reply */
-	replyhead = msg->front.iov_base;
-	WARN_ON(le32_to_cpu(replyhead->num_ops) == 0);
-	op = (void *)(replyhead + 1);
-	rc = le32_to_cpu(replyhead->result);
-	bytes = le64_to_cpu(op->extent.length);
-	read_op = (le16_to_cpu(op->op) == CEPH_OSD_OP_READ);
+	bytes = req->r_reply_op_len[0];
+	read_op = req->r_request_ops[0].op == CEPH_OSD_OP_READ;
 
 	dout("rbd_req_cb bytes=%llu readop=%d rc=%d\n",
 		(unsigned long long) bytes, read_op, (int) rc);
