@@ -1250,19 +1250,13 @@ done_osd_req:
 static void rbd_req_cb(struct ceph_osd_request *osd_req, struct ceph_msg *msg)
 {
 	struct rbd_request *rbd_req = osd_req->r_priv;
-	struct ceph_osd_reply_head *replyhead;
-	struct ceph_osd_op *op;
-	s32 rc;
+	int rc = osd_req->r_result;
 	u64 bytes;
 	int read_op;
 
 	/* parse reply */
-	replyhead = msg->front.iov_base;
-	WARN_ON(le32_to_cpu(replyhead->num_ops) == 0);
-	op = (void *)(replyhead + 1);
-	rc = (s32)le32_to_cpu(replyhead->result);
-	bytes = le64_to_cpu(op->extent.length);
-	read_op = (le16_to_cpu(op->op) == CEPH_OSD_OP_READ);
+	bytes = osd_req->r_reply_op_len[0];
+	read_op = osd_req->r_request_ops[0].op == CEPH_OSD_OP_READ;
 
 	dout("rbd_req_cb bytes=%llu readop=%d rc=%d\n",
 		(unsigned long long) bytes, read_op, (int) rc);
