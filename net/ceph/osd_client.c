@@ -563,6 +563,41 @@ __lookup_request_ge(struct ceph_osd_client *osdc,
 	return NULL;
 }
 
+#define list_last_entry(ptr, type, member) \
+	list_entry((ptr)->prev, type, member)
+
+/*
+ * Returns true if it's OK to move the given request to the
+ * the osd client's unsent list.  Called before moving the
+ * request to the beginning of the list (prepend == true) or
+ * to the end  (prepend == * false).
+ */
+static bool osdc_unsent_check(struct ceph_osd_client *osdc,
+			struct ceph_osd_request *req,
+			bool prepend)
+{
+	struct ceph_osd_request *list_req;
+	int bad;
+
+	if (list_empty(&osdc->req_unsent))
+		return true;
+
+	if (prepend) {
+		list_req = list_first_entry(&osdc->req_unsent,
+				    struct ceph_osd_request,
+				    r_req_lru_item);
+		bad = WARN_ON(req->r_tid > list_req->r_tid);
+	} else {
+		list_req = list_last_entry(&osdc->req_unsent,
+				    struct ceph_osd_request,
+				    r_req_lru_item);
+		bad = WARN_ON(req->r_tid < list_req->r_tid);
+	}
+	bad = bad || WARN_ON(req->r_tid == list_req->r_tid);
+
+	return !bad;
+}
+
 /*
  * Resubmit requests pending on the given osd.
  */
@@ -603,7 +638,12 @@ static void __kick_osd_requests(struct ceph_osd_client *osdc,
 		if (!req->r_linger)
 			req->r_flags |= CEPH_OSD_FLAG_RETRY;
 	}
-	list_splice(&resend, &osdc->req_unsent);
+	if (!list_empty(&resend)) {
+		req = list_last_entry(&resend, struct ceph_osd_request,
+					r_req_lru_item);
+		osdc_unsent_check(osdc, req, true);
+		list_splice(&resend, &osdc->req_unsent);
+	}
 
 	/*
 	 * Linger requests are re-registered before sending, which
@@ -618,6 +658,7 @@ static void __kick_osd_requests(struct ceph_osd_client *osdc,
 		 */
 		BUG_ON(!list_empty(&req->r_req_lru_item));
 		__register_request(osdc, req);
+		osdc_unsent_check(osdc, req, false);
 		list_add_tail(&req->r_req_lru_item, &osdc->req_unsent);
 		list_add_tail(&req->r_osd_item, &req->r_osd->o_requests);
 		__unregister_linger_request(osdc, req);
@@ -1036,6 +1077,7 @@ static int __map_request(struct ceph_osd_client *osdc,
 	if (req->r_osd) {
 		__remove_osd_from_lru(req->r_osd);
 		list_add_tail(&req->r_osd_item, &req->r_osd->o_requests);
+		osdc_unsent_check(osdc, req, false);
 		list_move_tail(&req->r_req_lru_item, &osdc->req_unsent);
 	} else {
 		list_move_tail(&req->r_req_lru_item, &osdc->req_notarget);
