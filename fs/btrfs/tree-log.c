@@ -3730,6 +3730,7 @@ next_slot:
 log_extents:
 	if (fast_search) {
 		btrfs_release_path(dst_path);
+		btrfs_release_path(path);
 		ret = btrfs_log_changed_extents(trans, root, inode, dst_path);
 		if (ret) {
 			err = ret;
