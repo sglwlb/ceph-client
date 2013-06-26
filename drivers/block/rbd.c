@@ -1662,6 +1662,12 @@ static int rbd_img_request_fill_bio(struct rbd_img_request *img_request,
 		op = rbd_osd_req_op_create(opcode, offset, length);
 		if (!op)
 			goto out_partial;
+
+		/*
+		 * set obj_request->img_request before creating
+		 * the osd_request so that it gets the right snapc
+		 */
+		rbd_img_obj_request_add(img_request, obj_request);
 		obj_request->osd_req = rbd_osd_req_create(rbd_dev,
 						img_request->write_request,
 						obj_request, op);
@@ -1669,8 +1675,6 @@ static int rbd_img_request_fill_bio(struct rbd_img_request *img_request,
 		if (!obj_request->osd_req)
 			goto out_partial;
 		/* status and version are initially zero-filled */
-
-		rbd_img_obj_request_add(img_request, obj_request);
 
 		image_offset += length;
 		resid -= length;
