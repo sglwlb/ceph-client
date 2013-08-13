@@ -74,6 +74,10 @@ struct buffer_head {
 	struct address_space *b_assoc_map;	/* mapping this buffer is
 						   associated with */
 	atomic_t b_count;		/* users using this buffer_head */
+	unsigned long removed_from;
+	unsigned long removed_jiffies;
+	unsigned long added_from;
+	unsigned long added_jiffies;
 };
 
 /*

@@ -2433,6 +2433,8 @@ repeat:
 		bh->b_private = jh;
 		jh->b_bh = bh;
 		get_bh(bh);
+		bh->added_from = _RET_IP_;
+		bh->added_jiffies = jiffies;
 		BUFFER_TRACE(bh, "added journal_head");
 	}
 	jh->b_jcount++;
@@ -2498,6 +2500,8 @@ void jbd2_journal_put_journal_head(struct journal_head *jh)
 	--jh->b_jcount;
 	if (!jh->b_jcount) {
 		__journal_remove_journal_head(bh);
+		bh->removed_from = _RET_IP_;
+		bh->removed_jiffies = jiffies;
 		jbd_unlock_bh_journal_head(bh);
 		__brelse(bh);
 	} else
