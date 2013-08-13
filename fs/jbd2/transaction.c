@@ -1275,6 +1275,10 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	journal = transaction->t_journal;
 	jh = jbd2_journal_grab_journal_head(bh);
 	if (!jh) {
+		printk(KERN_ERR "Dirtying buffer without jh at %lu: state %lx,"
+			"jh added from 0x%lx at %lu, removed from 0x%lx "
+			"at %lu\n", jiffies, bh->b_state, bh->removed_from,
+			bh->removed_jiffies, bh->added_from, bh->added_jiffies);
 		ret = -EUCLEAN;
 		goto out;
 	}
