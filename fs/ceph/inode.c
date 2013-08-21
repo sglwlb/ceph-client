@@ -12,6 +12,7 @@
 
 #include "super.h"
 #include "mds_client.h"
+#include "cache.h"
 #include <linux/ceph/decode.h>
 
 /*
@@ -31,6 +32,7 @@ static const struct inode_operations ceph_symlink_iops;
 static void ceph_invalidate_work(struct work_struct *work);
 static void ceph_writeback_work(struct work_struct *work);
 static void ceph_vmtruncate_work(struct work_struct *work);
+static void ceph_revalidate_work(struct work_struct *work);
 
 /*
  * find or create an inode, given the ceph ino number
@@ -386,6 +388,13 @@ struct inode *ceph_alloc_inode(struct super_block *sb)
 
 	INIT_WORK(&ci->i_vmtruncate_work, ceph_vmtruncate_work);
 
+#ifdef CONFIG_CEPH_FSCACHE
+	ci->fscache = NULL;
+	/* The first load is verifed cookie open time */
+	ci->i_fscache_gen = 1;
+	INIT_WORK(&ci->i_revalidate_work, ceph_revalidate_work);
+#endif
+
 	return &ci->vfs_inode;
 }
 
@@ -404,6 +413,8 @@ void ceph_destroy_inode(struct inode *inode)
 	struct rb_node *n;
 
 	dout("destroy_inode %p ino %llx.%llx\n", inode, ceph_vinop(inode));
+
+	ceph_fscache_unregister_inode_cookie(ci);
 
 	ceph_queue_caps_release(inode);
 
@@ -438,7 +449,6 @@ void ceph_destroy_inode(struct inode *inode)
 
 	call_rcu(&inode->i_rcu, ceph_i_callback);
 }
-
 
 /*
  * Helpers to fill in size, ctime, mtime, and atime.  We have to be
@@ -491,6 +501,10 @@ int ceph_fill_file_size(struct inode *inode, int issued,
 		     truncate_size);
 		ci->i_truncate_size = truncate_size;
 	}
+
+	if (queue_trunc)
+		fscache_invalidate(ci->fscache);
+
 	return queue_trunc;
 }
 
@@ -1079,7 +1093,7 @@ int ceph_fill_trace(struct super_block *sb, struct ceph_mds_request *req,
 			 * complete.
 			 */
 			ceph_set_dentry_offset(req->r_old_dentry);
-			dout("dn %p gets new offset %lld\n", req->r_old_dentry, 
+			dout("dn %p gets new offset %lld\n", req->r_old_dentry,
 			     ceph_dentry(req->r_old_dentry)->offset);
 
 			dn = req->r_old_dentry;  /* use old_dentry */
@@ -1494,6 +1508,7 @@ void ceph_queue_vmtruncate(struct inode *inode)
 	struct ceph_inode_info *ci = ceph_inode(inode);
 
 	ihold(inode);
+
 	if (queue_work(ceph_sb_to_client(inode->i_sb)->trunc_wq,
 		       &ci->i_vmtruncate_work)) {
 		dout("ceph_queue_vmtruncate %p\n", inode);
@@ -1565,6 +1580,53 @@ retry:
 	wake_up_all(&ci->i_cap_wq);
 }
 
+static void ceph_revalidate_work(struct work_struct *work)
+{
+	int issued;
+	u32 orig_gen;
+	struct ceph_inode_info *ci = container_of(work, struct ceph_inode_info,
+						  i_revalidate_work);
+	struct inode *inode = &ci->vfs_inode;
+
+	spin_lock(&ci->i_ceph_lock);
+	issued = __ceph_caps_issued(ci, NULL);
+	orig_gen = ci->i_rdcache_gen;
+	spin_unlock(&ci->i_ceph_lock);
+
+	if (!(issued & CEPH_CAP_FILE_CACHE)) {
+		dout("revalidate_work lost cache before validation %p\n",
+		     inode);
+		goto out;
+	}
+
+	if (!fscache_check_consistency(ci->fscache))
+		fscache_invalidate(ci->fscache);
+
+	spin_lock(&ci->i_ceph_lock);
+	/* Update the new valid generation (backwards sanity check too) */
+	if (orig_gen > ci->i_fscache_gen) {
+		ci->i_fscache_gen = orig_gen;
+	}
+	spin_unlock(&ci->i_ceph_lock);
+
+out:
+	iput(&ci->vfs_inode);
+}
+
+void ceph_queue_revalidate(struct inode *inode)
+{
+	struct ceph_inode_info *ci = ceph_inode(inode);
+
+	ihold(inode);
+
+	if (queue_work(ceph_sb_to_client(inode->i_sb)->revalidate_wq,
+		       &ci->i_revalidate_work)) {
+		dout("ceph_queue_revalidate %p\n", inode);
+	} else {
+		dout("ceph_queue_revalidate %p failed\n)", inode);
+		iput(inode);
+	}
+}
 
 /*
  * symlinks
