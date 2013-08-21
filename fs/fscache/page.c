@@ -1132,3 +1132,19 @@ void __fscache_uncache_all_inode_pages(struct fscache_cookie *cookie,
 	_leave("");
 }
 EXPORT_SYMBOL(__fscache_uncache_all_inode_pages);
+
+/**
+ * Unmark pages allocate in the readahead code path (via:
+ * fscache_readpages_or_alloc) after delegating to the base filesystem
+ */
+void __fscache_readpages_cancel(struct fscache_cookie *cookie,
+				struct list_head *pages)
+{
+	struct page *page;
+
+	list_for_each_entry(page, pages, lru) {
+		if (PageFsCache(page))
+			__fscache_uncache_page(cookie, page);
+	}
+}
+EXPORT_SYMBOL(__fscache_readpages_cancel);
