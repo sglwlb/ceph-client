@@ -32,9 +32,6 @@ extern struct fscache_netfs ceph_cache_netfs;
 
 void ceph_fscache_register_fsid_cookie(struct ceph_fs_client* fsc);
 void ceph_fscache_unregister_fsid_cookie(struct ceph_fs_client* fsc);
-void ceph_fscache_register_inode_cookie(struct ceph_fs_client* parent_fsc,
-					struct ceph_inode_info* ci);
-void ceph_fscache_unregister_inode_cookie(struct ceph_inode_info* ci);
 
 int __ceph_readpage_from_fscache(struct inode *inode, struct page *page);
 int __ceph_readpages_from_fscache(struct inode *inode,
@@ -46,6 +43,9 @@ void __ceph_invalidate_fscache_page(struct inode* inode, struct page *page);
 
 #ifdef CONFIG_CEPH_FSCACHE
 
+void ceph_fscache_register_inode_cookie(struct ceph_fs_client* parent_fsc,
+					struct ceph_inode_info* ci);
+void ceph_fscache_unregister_inode_cookie(struct ceph_inode_info* ci);
 
 static inline int ceph_readpage_from_fscache(struct inode* inode,
 					     struct page *page)
@@ -66,6 +66,11 @@ static inline void ceph_readpage_to_fscache(struct inode *inode,
 					    struct page *page)
 {
 	return __ceph_readpage_to_fscache(inode, page);
+}
+
+static inline void ceph_fscache_invalidate(struct inode *inode)
+{
+	fscache_invalidate(ceph_inode(inode)->fscache);
 }
 
 static inline void ceph_invalidate_fscache_page(struct inode *inode,
@@ -90,6 +95,15 @@ static inline void ceph_fscache_readpages_cancel(struct inode *inode,
 
 #else
 
+static inline void ceph_fscache_register_inode_cookie(struct ceph_fs_client* parent_fsc,
+						      struct ceph_inode_info* ci)
+{
+}
+
+static inline void ceph_fscache_unregister_inode_cookie(struct ceph_inode_info* ci)
+{
+}
+
 static inline int ceph_readpage_from_fscache(struct inode* inode,
 					     struct page *page)
 {
@@ -109,6 +123,10 @@ static inline void ceph_readpage_to_fscache(struct inode *inode,
 {
 }
 
+static inline void ceph_fscache_invalidate(struct inode *inode)
+{
+}
+
 static inline void ceph_invalidate_fscache_page(struct inode *inode,
 						struct page *page)
 {
@@ -119,8 +137,8 @@ static inline int ceph_release_fscache_page(struct page *page, gfp_t gfp)
 	return 1;
 }
 
-static void ceph_fscache_readpages_cancel(struct inode *inode,
-					  struct list_head *pages)
+static inline void ceph_fscache_readpages_cancel(struct inode *inode,
+						 struct list_head *pages)
 {
 
 }

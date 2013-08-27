@@ -86,7 +86,7 @@ static int ceph_init_file(struct inode *inode, struct file *file, int fmode)
 		 */
 		ceph_fscache_register_inode_cookie(mdsc->fsc, ci);
 		if ((fmode & CEPH_FILE_MODE_WR))
-			fscache_invalidate(ci->fscache);
+			ceph_fscache_invalidate(inode);
 	case S_IFDIR:
 		dout("init_file %p %p 0%o (regular)\n", inode, file,
 		     inode->i_mode);

@@ -2421,7 +2421,7 @@ static void handle_cap_grant(struct inode *inode, struct ceph_mds_caps *grant,
 			}
 		}
 
-		fscache_invalidate(ci->fscache);
+		ceph_fscache_invalidate(inode);
 	}
 
 	/* side effects now are allowed */
@@ -2724,7 +2724,7 @@ static void handle_cap_trunc(struct inode *inode,
 
 	if (queue_trunc) {
 		ceph_queue_vmtruncate(inode);
-		fscache_invalidate(ci->fscache);
+		ceph_fscache_invalidate(inode);
 	}
 }
 

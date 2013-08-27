@@ -32,7 +32,6 @@ static const struct inode_operations ceph_symlink_iops;
 static void ceph_invalidate_work(struct work_struct *work);
 static void ceph_writeback_work(struct work_struct *work);
 static void ceph_vmtruncate_work(struct work_struct *work);
-static void ceph_revalidate_work(struct work_struct *work);
 
 /*
  * find or create an inode, given the ceph ino number
@@ -503,7 +502,7 @@ int ceph_fill_file_size(struct inode *inode, int issued,
 	}
 
 	if (queue_trunc)
-		fscache_invalidate(ci->fscache);
+		ceph_fscache_invalidate(inode);
 
 	return queue_trunc;
 }
@@ -1580,6 +1579,7 @@ retry:
 	wake_up_all(&ci->i_cap_wq);
 }
 
+#ifdef CONFIG_CEPH_FSCACHE
 static void ceph_revalidate_work(struct work_struct *work)
 {
 	int issued;
@@ -1627,6 +1627,11 @@ void ceph_queue_revalidate(struct inode *inode)
 		iput(inode);
 	}
 }
+#else
+void ceph_queue_revalidate(struct inode *inode)
+{
+}
+#endif
 
 /*
  * symlinks
