@@ -3327,10 +3327,13 @@ static void rbd_exists_validate(struct rbd_device *rbd_dev)
 static int rbd_dev_refresh(struct rbd_device *rbd_dev)
 {
 	u64 mapping_size;
-	int ret;
+	int ret = 0;
 
 	rbd_assert(rbd_image_format_valid(rbd_dev->image_format));
 	down_write(&rbd_dev->header_rwsem);
+	if (!rbd_dev->watch_event)
+		goto out;
+
 	mapping_size = rbd_dev->mapping.size;
 	if (rbd_dev->image_format == 1)
 		ret = rbd_dev_v1_header_info(rbd_dev);
@@ -3340,7 +3343,6 @@ static int rbd_dev_refresh(struct rbd_device *rbd_dev)
 	/* If it's a mapped snapshot, validate its EXISTS flag */
 
 	rbd_exists_validate(rbd_dev);
-	up_write(&rbd_dev->header_rwsem);
 
 	if (mapping_size != rbd_dev->mapping.size) {
 		sector_t size;
@@ -3350,7 +3352,8 @@ static int rbd_dev_refresh(struct rbd_device *rbd_dev)
 		set_capacity(rbd_dev->disk, size);
 		revalidate_disk(rbd_dev->disk);
 	}
-
+out:
+	up_write(&rbd_dev->header_rwsem);
 	return ret;
 }
 
@@ -5159,10 +5162,26 @@ static ssize_t rbd_remove(struct bus_type *bus,
 	if (ret < 0 || already)
 		return ret;
 
+	/*
+	 * take header semaphore while destroying the device and
+	 * canceling the watch so that device destruction will
+	 * not race with device updates from the watch callback
+	 */
+	down_write(&rbd_dev->header_rwsem);
 	rbd_bus_del_dev(rbd_dev);
 	ret = rbd_dev_header_watch_sync(rbd_dev, false);
+	up_write(&rbd_dev->header_rwsem);
+
 	if (ret)
 		rbd_warn(rbd_dev, "failed to cancel watch event (%d)\n", ret);
+
+	/*
+	 * flush remaing watch callbacks - these don't update anything
+	 * anymore since rbd_dev->watch_event is NULL, but it avoids
+	 * the watch callback using a freed rbd_dev
+	 */
+	dout("%s: flushing notifies", __func__);
+	ceph_osdc_flush_notifies(&rbd_dev->rbd_client->client->osdc);
 	rbd_dev_image_release(rbd_dev);
 	module_put(THIS_MODULE);
 
