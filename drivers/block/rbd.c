@@ -343,6 +343,9 @@ struct rbd_device {
 	struct ceph_osd_event   *watch_event;
 	struct rbd_obj_request	*watch_request;
 
+	bool			shutting_down;	/* rbd_remove() in progress */
+	struct mutex		shutdown_lock;	/* protects shutting_down */
+
 	struct rbd_spec		*parent_spec;
 	u64			parent_overlap;
 	atomic_t		parent_ref;
@@ -3324,6 +3327,24 @@ static void rbd_exists_validate(struct rbd_device *rbd_dev)
 		clear_bit(RBD_DEV_FLAG_EXISTS, &rbd_dev->flags);
 }
 
+static void rbd_dev_update_size(struct rbd_device *rbd_dev)
+{
+	sector_t size;
+
+	mutex_lock(&rbd_dev->shutdown_lock);
+	/*
+	 * If the device is being removed, rbd_dev->disk has
+	 * been destroyed, so don't try to update its size
+	 */
+	if (!rbd_dev->shutting_down) {
+		size = (sector_t)rbd_dev->mapping.size / SECTOR_SIZE;
+		dout("setting size to %llu sectors", (unsigned long long)size);
+		set_capacity(rbd_dev->disk, size);
+		revalidate_disk(rbd_dev->disk);
+	}
+	mutex_unlock(&rbd_dev->shutdown_lock);
+}
+
 static int rbd_dev_refresh(struct rbd_device *rbd_dev)
 {
 	u64 mapping_size;
@@ -3343,12 +3364,7 @@ static int rbd_dev_refresh(struct rbd_device *rbd_dev)
 	up_write(&rbd_dev->header_rwsem);
 
 	if (mapping_size != rbd_dev->mapping.size) {
-		sector_t size;
-
-		size = (sector_t)rbd_dev->mapping.size / SECTOR_SIZE;
-		dout("setting size to %llu sectors", (unsigned long long)size);
-		set_capacity(rbd_dev->disk, size);
-		revalidate_disk(rbd_dev->disk);
+		rbd_dev_update_size(rbd_dev);
 	}
 
 	return ret;
@@ -3656,6 +3672,8 @@ static struct rbd_device *rbd_dev_create(struct rbd_client *rbdc,
 	atomic_set(&rbd_dev->parent_ref, 0);
 	INIT_LIST_HEAD(&rbd_dev->node);
 	init_rwsem(&rbd_dev->header_rwsem);
+	mutex_init(&rbd_dev->shutdown_lock);
+	rbd_dev->shutting_down = false;
 
 	rbd_dev->spec = spec;
 	rbd_dev->rbd_client = rbdc;
@@ -5159,7 +5177,16 @@ static ssize_t rbd_remove(struct bus_type *bus,
 	if (ret < 0 || already)
 		return ret;
 
+	/*
+	 * hold shutdown_lock while destroying the device so that
+	 * device destruction will not race with device updates from
+	 * the watch callback
+	 */
+	mutex_lock(&rbd_dev->shutdown_lock);
+	rbd_dev->shutting_down = true;
 	rbd_bus_del_dev(rbd_dev);
+	mutex_unlock(&rbd_dev->shutdown_lock);
+
 	ret = rbd_dev_header_watch_sync(rbd_dev, false);
 	if (ret)
 		rbd_warn(rbd_dev, "failed to cancel watch event (%d)\n", ret);
