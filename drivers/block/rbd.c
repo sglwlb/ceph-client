@@ -2826,13 +2826,15 @@ static int rbd_obj_notify_ack(struct rbd_device *rbd_dev, u64 notify_id)
 	obj_request->osd_req = rbd_osd_req_create(rbd_dev, false, obj_request);
 	if (!obj_request->osd_req)
 		goto out;
-	obj_request->callback = rbd_obj_request_put;
 
 	osd_req_op_watch_init(obj_request->osd_req, 0, CEPH_OSD_OP_NOTIFY_ACK,
 					notify_id, 0, 0);
 	rbd_osd_req_format_read(obj_request);
 
 	ret = rbd_obj_request_submit(osdc, obj_request);
+	if (ret)
+		goto out;
+	ret = rbd_obj_request_wait(obj_request);
 out:
 	if (ret)
 		rbd_obj_request_put(obj_request);
